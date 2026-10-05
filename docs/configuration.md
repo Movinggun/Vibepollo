@@ -4920,7 +4920,19 @@ Enables NVIDIA temporal adaptive quantization when supported.
 
 ### pacing_max_bitrate_kbps
 
-Sets the maximum bitrate, in Kbps, considered by the network pacing policy. Set `0` to use the automatic default.
+Sets the outgoing video packet pacing rate in Kbps without changing the network adapter's physical link speed. Available under **Settings → Video → Quality and transport budget** (or **Network** in the legacy UI). Set `0` (the default) for automatic pacing.
+
+For PyroWave, a positive value caps the paced wire rate, including Ethernet/IP/UDP headers, video encryption and FEC parity. The sender uses the lower of this cap and the routed NIC's link speed. If the route's link speed is unavailable, the configured cap still applies. Frame size and negotiated bitrate do not raise the cap. With `0`, PyroWave retains automatic pacing based on the routed link or, when unavailable, frame/bitrate demand.
+
+For a 2.5 Gbps host connected to a gigabit client, use:
+
+```ini
+pacing_max_bitrate_kbps = 1000000
+```
+
+This targets 1 Gbps while leaving the host NIC at 2.5 Gbps. Use `900000` for more headroom. Save and restart Vibepollo before reconnecting. Keep the client's requested video bitrate comfortably below the pacing cap to allow for headers, encryption, FEC and audio. A cap below the produced traffic can increase latency; reduce the client bitrate or the host's `max_bitrate` if needed.
+
+This is a per-stream video pacer with batched sends, not a process-wide traffic shaper. Short bursts still transmit at the NIC's physical speed; audio, control traffic and simultaneous streams need their own headroom. For H.264/HEVC/AV1, the existing policy may raise a configured pacing value to 110% of the negotiated video bitrate to avoid a sender backlog.
 
 ### packetsize
 

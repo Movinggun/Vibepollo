@@ -2254,7 +2254,7 @@ namespace stream {
         // jitter on the client. If the operator sets `pacing_max_bitrate_kbps` we honor
         // it; otherwise keep legacy behaviour.
         size_t pacing_bps;
-        if (config::stream.pacing_max_bitrate_kbps > 0) {
+        if (!pyrowave_session && config::stream.pacing_max_bitrate_kbps > 0) {
           pacing_bps = (size_t) config::stream.pacing_max_bitrate_kbps * 1000ull;
 
           // Never pace below the session's negotiated bitrate: a cap under the encoder's
@@ -2321,7 +2321,8 @@ namespace stream {
                                   (session->video.cipher ? sizeof(video_packet_enc_prefix_t) : 0);
           ratecontrol_packets_in_1ms = pyrowave::policy::pacing_packets_per_ms(
             link_bps, stream_kbps, payload_blocksize, wire_bytes,
-            packet->data_size() + sizeof(frame_header), monitor.framerate
+            packet->data_size() + sizeof(frame_header), monitor.framerate,
+            std::uint64_t(config::stream.pacing_max_bitrate_kbps) * 1000
           );
           const std::pair pacing_source {link_bps, link_interface_id};
           // Route probes can alternate between a link speed and the fallback on
@@ -2333,7 +2334,8 @@ namespace stream {
             wire_timeline_state.last_pacing_log = packet_pop_timestamp;
             BOOST_LOG(info) << "PyroWave pacing: "sv << session->localAddress << " -> "sv << session->video.peer.address()
                             << " via "sv << wire_timeline_state.cached_link_alias << ", " << link_interface_kind << ' ' << link_interface_id
-                            << ", routed_link_bps "sv << link_bps << (link_bps ? "" : " (fallback: frame/bitrate demand)")
+                            << ", routed_link_bps "sv << link_bps << (link_bps ? "" : " (route unavailable)")
+                            << ", configured pacing cap "sv << config::stream.pacing_max_bitrate_kbps << " kbps"sv
                             << ", "sv << ratecontrol_packets_in_1ms << " packets/ms at "sv << wire_bytes << " wire bytes ("sv
                             << ratecontrol_packets_in_1ms * wire_bytes * 8 / 1000 << " Mbps), payload "sv << payload_blocksize
                             << " bytes, stream "sv << stream_kbps << " kbps at "sv << monitor.framerate << " fps"sv;

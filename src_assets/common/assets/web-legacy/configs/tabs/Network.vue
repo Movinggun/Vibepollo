@@ -189,6 +189,11 @@ const effectivePort = computed(() => Number(config.port ?? defaultMoonlightPort)
       class="mb-6"
     />
     <ConfigFieldRenderer
+      setting-key="pacing_max_bitrate_kbps"
+      v-model="config.pacing_max_bitrate_kbps"
+      class="mb-6"
+    />
+    <ConfigFieldRenderer
       setting-key="pyrowave_critical_fec_percentage"
       v-model="config.pyrowave_critical_fec_percentage"
       class="mb-6"

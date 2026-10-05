@@ -25,10 +25,13 @@ namespace pyrowave::policy {
   std::size_t max_bitstream_bytes(int packetsize, bool length_prefixed, bool critical_fec = false);
 
   /// Packets per pacing quantum, using the routed link speed or stream bitrate.
+  /// A nonzero max_pacing_bps caps wire rate, including headers and parity,
+  /// even when the route is unknown or frame/bitrate demand exceeds the cap.
   std::size_t pacing_packets_per_ms(
     std::uint64_t link_bps, int bitrate_kbps,
     std::size_t payload_bytes, std::size_t wire_bytes,
-    std::size_t frame_bytes = 0, int framerate = 0
+    std::size_t frame_bytes = 0, int framerate = 0,
+    std::uint64_t max_pacing_bps = 0
   );
 
   enum class framing_e {

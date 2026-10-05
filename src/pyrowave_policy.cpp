@@ -717,7 +717,8 @@ namespace pyrowave::policy {
   std::size_t pacing_packets_per_ms(
     std::uint64_t link_bps, int bitrate_kbps,
     std::size_t payload_bytes, std::size_t wire_bytes,
-    std::size_t frame_bytes, int framerate
+    std::size_t frame_bytes, int framerate,
+    std::uint64_t max_pacing_bps
   ) {
     if (payload_bytes == 0 || wire_bytes == 0) {
       return 1;
@@ -728,8 +729,13 @@ namespace pyrowave::policy {
     const auto bitrate_allowance = (std::uint64_t(std::max(bitrate_kbps, 0)) + 8 * payload_bytes - 1) / (8 * payload_bytes);
     // Round demand up so quantizing to a pacing quantum cannot create a backlog.
     // Round link capacity down so pacing never exceeds the reported link speed.
-    const auto packets = link_bps != 0 ? link_bps / 8 / 1000 / wire_bytes :
-                                       std::max(frame_allowance, bitrate_allowance);
+    // The local NIC can be faster than the client's link. An operator cap
+    // describes that downstream bottleneck and must not be raised to demand.
+    const auto capacity_bps = max_pacing_bps != 0 ?
+                                (link_bps != 0 ? std::min(link_bps, max_pacing_bps) : max_pacing_bps) :
+                                link_bps;
+    const auto packets = capacity_bps != 0 ? capacity_bps / 8 / 1000 / wire_bytes :
+                                           std::max(frame_allowance, bitrate_allowance);
     return std::max<std::size_t>(1, packets);
   }
 

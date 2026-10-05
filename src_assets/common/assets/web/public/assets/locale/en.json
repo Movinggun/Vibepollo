@@ -1110,6 +1110,7 @@
     "limit_framerate": "Limit frame rate",
     "nvenc_temporal_aq": "NVIDIA temporal adaptive quantization",
     "pacing_max_bitrate_kbps": "Pacing maximum bitrate (Kbps)",
+    "pacing_max_bitrate_kbps_desc": "Limit outgoing video packet pacing without changing the network adapter speed. For PyroWave with a gigabit client, use 1000000 Kbps (1 Gbps), or 900000 for headroom, and keep the client video bitrate lower. Includes network headers and error correction; applies per stream. 0 uses automatic pacing. Other codecs may raise the pacing rate to keep up with the video bitrate.",
     "packetsize": "Network packet size"
   },
   "index": {

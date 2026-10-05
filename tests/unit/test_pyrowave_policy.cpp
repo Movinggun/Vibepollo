@@ -813,3 +813,20 @@ TEST(PyroWavePolicy, PacingTracksLinkCapacityAndAccountsForWireOverhead) {
   EXPECT_EQ(pacing_packets_per_ms(100000000, 200000, 1376, 1474, 1376000, 120), 8u);
   EXPECT_EQ(pacing_packets_per_ms(0, 0, 0, 0), 1u);
 }
+
+TEST(PyroWavePolicy, ExplicitPacingCapSupportsSlowerClientsWithoutChangingTheHostLink) {
+  // Same gigabit pacing on a 2.5G or 10G host, despite large frame demand.
+  for (const auto link : {2500000000ull, 10000000000ull}) {
+    EXPECT_EQ(pacing_packets_per_ms(link, 600000, 1376, 1474, 1376000, 120, 1000000000), 84u);
+  }
+  // A cap also works when route discovery fails; it must not rise to demand.
+  EXPECT_EQ(pacing_packets_per_ms(0, 2000000, 1376, 1474, 5504000, 240, 1000000000), 84u);
+  // A user cap cannot increase the capacity of a slower local link.
+  EXPECT_EQ(pacing_packets_per_ms(100000000, 600000, 1376, 1474, 0, 0, 1000000000), 8u);
+  // Account for IPv6/encryption overhead and reserve optional headroom.
+  EXPECT_EQ(pacing_packets_per_ms(2500000000, 600000, 1376, 1506, 0, 0, 1000000000), 83u);
+  EXPECT_EQ(pacing_packets_per_ms(2500000000, 600000, 1376, 1474, 0, 0, 900000000), 76u);
+  // Zero keeps automatic behavior; very small caps still permit one packet.
+  EXPECT_EQ(pacing_packets_per_ms(2500000000, 600000, 1376, 1474, 0, 0, 0), 212u);
+  EXPECT_EQ(pacing_packets_per_ms(0, 0, 1376, 1474, 0, 0, 1), 1u);
+}

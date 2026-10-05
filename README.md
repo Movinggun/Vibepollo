@@ -1,5 +1,19 @@
 # Vibepollo
 
+## Gigabit-client pacing in this fork
+
+This fork fixes PyroWave ignoring `pacing_max_bitrate_kbps`. A 2.5 Gbps host can now pace its video for a gigabit client while its NIC keeps the full 2.5 Gbps link speed.
+
+In **Settings → Video → Quality and transport budget**, set **Pacing maximum bitrate (Kbps)** to `1000000` for 1 Gbps, or `900000` for headroom. In the legacy UI, the setting is under **Network**. You can also add this to `sunshine.conf`:
+
+```ini
+pacing_max_bitrate_kbps = 1000000
+```
+
+Save, restart Vibepollo and reconnect. Keep the client's video bitrate below the cap to leave room for headers, error correction and audio. The cap applies to each video stream; it does not change the NIC or limit other applications. `0` restores automatic pacing. See [configuration details](docs/configuration.md#pacing_max_bitrate_kbps).
+
+The **Gigabit pacing checks** workflow runs the PyroWave policy tests and builds both web UIs. The upstream **Validate Windows runner** workflow can build an unsigned Windows MSI from this fork using a hosted runner.
+
 ## What is Vibepollo?
 
 Vibepollo is an AI‑enhanced version of Apollo, a popular remote streaming application. It intends to integrate all scripts from myself (Nonary) and more.

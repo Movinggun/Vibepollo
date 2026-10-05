@@ -69,6 +69,7 @@ const NUMBER_FIELD_OVERRIDES: Record<string, Partial<ConfigFieldDefinition>> = {
   port: { min: 1029, max: 65514, placeholder: '47989' },
   ping_timeout: { min: 0, step: 100, placeholder: '10000' },
   max_bitrate: { min: 0, placeholder: '0' },
+  pacing_max_bitrate_kbps: { min: 0, max: 10000000, step: 1000, placeholder: '0' },
   minimum_fps_target: { min: 0, max: 1000, placeholder: '0' },
   rtx_hdr_contrast: { min: -100, max: 100, step: 1, placeholder: '0' },
   rtx_hdr_saturation: { min: -100, max: 100, step: 1, placeholder: '0' },
