@@ -830,3 +830,69 @@ TEST(PyroWavePolicy, ExplicitPacingCapSupportsSlowerClientsWithoutChangingTheHos
   EXPECT_EQ(pacing_packets_per_ms(2500000000, 600000, 1376, 1474, 0, 0, 0), 212u);
   EXPECT_EQ(pacing_packets_per_ms(0, 0, 1376, 1474, 0, 0, 1), 1u);
 }
+
+TEST(PyroWavePolicy, CappedBatchesCannotDumpAMillisecondOfTrafficAtOnce) {
+  EXPECT_EQ(capped_pacing_batch_packets(84), 8u);
+  EXPECT_EQ(capped_pacing_batch_packets(76), 8u);
+  EXPECT_EQ(capped_pacing_batch_packets(3), 3u);
+  EXPECT_EQ(capped_pacing_batch_packets(0), 1u);
+  // A 2.5G -> 1G switch has to queue only the excess from a small batch,
+  // rather than the previous pair of 46-packet batches (~80 KiB excess).
+  const auto excess_bytes = capped_pacing_batch_packets(84) * 1474 * 3 / 5;
+  EXPECT_LT(excess_bytes, 8 * 1024u);
+}
+
+TEST(PyroWavePolicy, EveryCappedBatchGetsItsOwnDeadlineIncludingPartialBlocks) {
+  using namespace std::chrono_literals;
+  batch_pacer_t pacer;
+  const auto start = batch_pacer_t::clock::time_point {} + 1s;
+  EXPECT_LE(pacer.due(), start);
+  pacer.sent(start, 8, 84);
+  EXPECT_EQ(pacer.due(), start + 95239ns);
+  pacer.sent(pacer.due(), 3, 84);  // End of an FEC block or frame.
+  EXPECT_EQ(pacer.due(), start + 130954ns);
+  pacer.sent(pacer.due(), 8, 84);  // Next block/frame keeps the same budget.
+  EXPECT_EQ(pacer.due(), start + 226193ns);
+}
+
+TEST(PyroWavePolicy, LateWakeupsDoNotAccumulateCatchUpCredit) {
+  using namespace std::chrono_literals;
+  batch_pacer_t pacer;
+  const auto start = batch_pacer_t::clock::time_point {} + 1s;
+  pacer.sent(start, 8, 84);
+  // Simulate preemption well past multiple batch deadlines.
+  const auto late_start = start + 2ms;
+  pacer.sent(late_start, 8, 84);
+  EXPECT_EQ(pacer.due(), late_start + 95239ns);
+  // No immediate second batch, even after a long idle between frames.
+  pacer.sent(start + 1s, 8, 84);
+  EXPECT_EQ(pacer.due(), start + 1s + 95239ns);
+}
+
+TEST(PyroWavePolicy, CappedPacingPreservesOutstandingDebtWhenTheRateChanges) {
+  using namespace std::chrono_literals;
+  batch_pacer_t pacer;
+  const auto start = batch_pacer_t::clock::time_point {} + 1s;
+  pacer.sent(start, 8, 84);
+  const auto outstanding = pacer.due();
+  pacer.sent(outstanding, 8, 8);  // Host route drops to 100 Mbps.
+  EXPECT_EQ(pacer.due(), outstanding + 1ms);
+  pacer.sent(pacer.due(), 1, 0);  // Always make forward progress.
+  EXPECT_EQ(pacer.due(), outstanding + 2ms);
+}
+
+TEST(PyroWavePolicy, CappedPacingSurvivesRepeatedSchedulerStallsWithoutBursting) {
+  using namespace std::chrono_literals;
+  batch_pacer_t pacer;
+  auto when = batch_pacer_t::clock::time_point {} + 1s;
+  for (int i = 0; i < 1000; ++i) {
+    const auto due = pacer.due();
+    when = std::max(when, due);
+    if (i % 7 == 0) {
+      when += 1500us;
+    }
+    pacer.sent(when, 8, 84);
+    EXPECT_GE(pacer.due() - when, 95238ns);
+    when = pacer.due();
+  }
+}

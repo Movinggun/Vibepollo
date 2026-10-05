@@ -739,6 +739,20 @@ namespace pyrowave::policy {
     return std::max<std::size_t>(1, packets);
   }
 
+  std::size_t capped_pacing_batch_packets(std::size_t packets_per_ms) {
+    return std::clamp<std::size_t>(packets_per_ms, 1, 8);
+  }
+
+  batch_pacer_t::clock::time_point batch_pacer_t::due() const {
+    return next_send;
+  }
+
+  void batch_pacer_t::sent(clock::time_point actual_start, std::size_t packets, std::size_t packets_per_ms) {
+    const auto rate = std::max<std::size_t>(1, packets_per_ms);
+    const auto interval = std::chrono::nanoseconds((1'000'000ull * packets + rate - 1) / rate);
+    next_send = std::max(next_send, actual_start) + interval;
+  }
+
   budget_t::budget_t(int framerate, int bitrate_kbps, std::size_t max_frame_bytes, bool stable_frame_size):
       bitrate_kbps {bitrate_kbps},
       max_frame_bytes {max_frame_bytes},

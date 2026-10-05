@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -26,6 +27,12 @@
 #include "utf_utils.h"
 
 namespace platf {
+  struct deinit_t;
+  enum class qos_data_type_e : int;
+
+  /// Windows packet-scheduler shaping for this destination; zero disables it.
+  std::unique_ptr<deinit_t> enable_socket_qos(uintptr_t native_socket, boost::asio::ip::address &address, uint16_t port, qos_data_type_e data_type, bool dscp_tagging, std::uint64_t max_bps);
+
   /// Interface resolved by routed_link_bps(), for diagnostics.
   struct routed_link_info_t {
     std::uint64_t luid = 0;

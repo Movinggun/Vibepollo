@@ -4932,7 +4932,11 @@ pacing_max_bitrate_kbps = 1000000
 
 This targets 1 Gbps while leaving the host NIC at 2.5 Gbps. Use `900000` for more headroom. Save and restart Vibepollo before reconnecting. Keep the client's requested video bitrate comfortably below the pacing cap to allow for headers, encryption, FEC and audio. A cap below the produced traffic can increase latency; reduce the client bitrate or the host's `max_bitrate` if needed.
 
-This is a per-stream video pacer with batched sends, not a process-wide traffic shaper. Short bursts still transmit at the NIC's physical speed; audio, control traffic and simultaneous streams need their own headroom. For H.264/HEVC/AV1, the existing policy may raise a configured pacing value to 110% of the negotiated video bitrate to avoid a sender backlog.
+With a positive PyroWave cap, batches contain at most eight packets and every batch has its own deadline. Deadlines follow actual send times, including across frames and FEC blocks, so late wake-ups cannot cause catch-up bursts. A bounded spin wait of up to 200 microseconds avoids short-sleep timer overshoot; this increases CPU use on the video-send thread.
+
+On Windows, capped PyroWave streams also request qWAVE packet-scheduler shaping for their video destination, leaving room for Ethernet overhead. This applies even when the client does not request DSCP tagging. The log reports whether shaping is active or failed; the small-batch pacer continues when qWAVE is unavailable. No persistent Windows QoS policy is installed.
+
+This is a per-stream video cap. Individual packets and small batches still transmit at the NIC's physical speed; audio, control traffic and simultaneous streams need their own headroom. For H.264/HEVC/AV1, the existing policy may raise a configured pacing value to 110% of the negotiated video bitrate to avoid a sender backlog.
 
 ### packetsize
 

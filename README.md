@@ -2,7 +2,7 @@
 
 ## Gigabit-client pacing in this fork
 
-This fork fixes PyroWave ignoring `pacing_max_bitrate_kbps`. A 2.5 Gbps host can now pace its video for a gigabit client while its NIC keeps the full 2.5 Gbps link speed.
+This fork fixes PyroWave ignoring `pacing_max_bitrate_kbps` and sending large bursts despite an average-rate cap. Capped streams send at most eight packets per batch, pace every batch from its actual send time, and cannot catch up after a late wake-up. Windows also applies packet-scheduler shaping to the stream. This lets a 2.5 Gbps host pace video for a gigabit client while its NIC keeps the full 2.5 Gbps link speed.
 
 In **Settings → Video → Quality and transport budget**, set **Pacing maximum bitrate (Kbps)** to `1000000` for 1 Gbps, or `900000` for headroom. In the legacy UI, the setting is under **Network**. You can also add this to `sunshine.conf`:
 
@@ -11,6 +11,8 @@ pacing_max_bitrate_kbps = 1000000
 ```
 
 Save, restart Vibepollo and reconnect. Keep the client's video bitrate below the cap to leave room for headers, error correction and audio. The cap applies to each video stream; it does not change the NIC or limit other applications. `0` restores automatic pacing. See [configuration details](docs/configuration.md#pacing_max_bitrate_kbps).
+
+The small-batch pacer uses a short spin wait to avoid timer overshoot, increasing CPU use on the video-send thread. Windows logs whether kernel shaping was applied; the small-batch pacer remains active if shaping is unavailable. The fix was tested with a 2.5 Gbps Windows host and a gigabit client requesting 685 Mbps at 120 FPS.
 
 The **Gigabit pacing checks** workflow runs the PyroWave policy tests and builds both web UIs. The upstream **Validate Windows runner** workflow can build an unsigned Windows MSI from this fork using a hosted runner.
 

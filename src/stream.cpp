@@ -2047,6 +2047,7 @@ namespace stream {
       std::uint64_t cached_link_bps = 0;
       std::uint64_t cached_interface_id = 0;
       std::string cached_link_alias = "unavailable";
+      pyrowave::policy::batch_pacer_t capped_pacer;
     };
     std::unordered_map<session_t *, wire_timeline_state_t> wire_timeline_by_session;
 
@@ -2277,6 +2278,7 @@ namespace stream {
         //                                          bps    ms    packet      byte
         size_t ratecontrol_packets_in_1ms = pacing_bps / 1000 / blocksize / 8;
         ratecontrol_packets_in_1ms = std::max<size_t>(1, ratecontrol_packets_in_1ms);
+        const bool cap_batches = pyrowave_session && config::stream.pacing_max_bitrate_kbps > 0;
         if (pyrowave_session) {
           // Refresh the actual route periodically. Socket/interface discovery and
           // sysfs reads must not block the send path on every frame.
@@ -2338,7 +2340,8 @@ namespace stream {
                             << ", configured pacing cap "sv << config::stream.pacing_max_bitrate_kbps << " kbps"sv
                             << ", "sv << ratecontrol_packets_in_1ms << " packets/ms at "sv << wire_bytes << " wire bytes ("sv
                             << ratecontrol_packets_in_1ms * wire_bytes * 8 / 1000 << " Mbps), payload "sv << payload_blocksize
-                            << " bytes, stream "sv << stream_kbps << " kbps at "sv << monitor.framerate << " fps"sv;
+                            << " bytes, stream "sv << stream_kbps << " kbps at "sv << monitor.framerate << " fps"sv
+                            << (cap_batches ? "; burst pacer v2 (8-packet maximum, no catch-up)" : "");
           }
         }
 
@@ -2352,6 +2355,10 @@ namespace stream {
         max_batch_size_bytes = pyrowave_session ?
                                  std::min(max_batch_size_bytes, ratecontrol_packets_in_1ms * datagram_size) :
                                  std::min<size_t>(max_batch_size_bytes, (size_t) config::stream.video_max_batch_size_kb * 1024);
+        if (cap_batches) {
+          max_batch_size_bytes = std::min(max_batch_size_bytes,
+                                         pyrowave::policy::capped_pacing_batch_packets(ratecontrol_packets_in_1ms) * datagram_size);
+        }
 
         // Encryption adds a prefix to every datagram. Omitting it here lets a
         // nominally 64 KiB batch cross the Windows buffering threshold.
@@ -2487,18 +2494,34 @@ namespace stream {
               // Do pacing within the frame.
               // Also trigger pacing before the first send_batch() of the frame
               // to account for the last send_batch() of the previous frame.
-              if (ratecontrol_group_packets_sent >= ratecontrol_packets_in_1ms ||
+              if (cap_batches || ratecontrol_group_packets_sent >= ratecontrol_packets_in_1ms ||
                   ratecontrol_frame_packets_sent == 0) {
-                auto due = ratecontrol_frame_start +
-                           std::chrono::duration_cast<std::chrono::nanoseconds>(1ms) *
-                             ratecontrol_frame_packets_sent / ratecontrol_packets_in_1ms;
+                auto due = cap_batches ? wire_timeline_state.capped_pacer.due() : ratecontrol_frame_start +
+                           std::chrono::nanoseconds(1'000'000ull * ratecontrol_frame_packets_sent / ratecontrol_packets_in_1ms);
 
                 auto now = std::chrono::steady_clock::now();
                 if (now < due) {
                   auto sleep_time = due - now;
                   ratecontrol_sleep_logger.collect_and_log(std::chrono::duration<double, std::milli>(sleep_time).count());
                   const auto sleep_start = std::chrono::steady_clock::now();
-                  timer->sleep_for(sleep_time);
+                  if (cap_batches) {
+                    // Sub-millisecond timer overshoot can make a fine pacer
+                    // slower than the encoder. Sleep for long waits, then use
+                    // a bounded spin tail. Never send early or catch up in a burst.
+                    constexpr auto spin_tail = 200us;
+                    if (sleep_time > spin_tail) {
+                      timer->sleep_for(sleep_time - spin_tail);
+                    }
+                    while (std::chrono::steady_clock::now() < due) {
+#ifdef _WIN32
+                      YieldProcessor();
+#else
+                      std::atomic_signal_fence(std::memory_order_acq_rel);
+#endif
+                    }
+                  } else {
+                    timer->sleep_for(sleep_time);
+                  }
                   if (burst_first_send) {
                     burst_sleep_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - sleep_start).count();
                   }
@@ -2516,6 +2539,9 @@ namespace stream {
 
               frame_send_batch_latency_logger.first_point_now();
               const auto send_start = std::chrono::steady_clock::now();
+              if (cap_batches) {
+                wire_timeline_state.capped_pacer.sent(send_start, current_batch_size, ratecontrol_packets_in_1ms);
+              }
               if (!burst_first_send) {
                 burst_first_send = send_start;
               }
@@ -2552,9 +2578,8 @@ namespace stream {
           }
 
           // remember this in case the next frame comes immediately
-          ratecontrol_next_frame_start = ratecontrol_frame_start +
-                                         std::chrono::duration_cast<std::chrono::nanoseconds>(1ms) *
-                                           ratecontrol_frame_packets_sent / ratecontrol_packets_in_1ms;
+          ratecontrol_next_frame_start = cap_batches ? wire_timeline_state.capped_pacer.due() : ratecontrol_frame_start +
+                                         std::chrono::nanoseconds(1'000'000ull * ratecontrol_frame_packets_sent / ratecontrol_packets_in_1ms);
           ratecontrol_frame_packets_logger.collect_and_log((double) ratecontrol_frame_packets_sent);
 
           frame_network_latency_logger.second_point_now_and_log();
@@ -3042,7 +3067,18 @@ namespace stream {
 
     // Enable local prioritization and QoS tagging on video traffic if requested by the client
     auto address = session->video.peer.address();
+#ifdef _WIN32
+    std::uint64_t shaping_bps = 0;
+    if (session->config.monitor.videoFormat == pyrowave::protocol::BITSTREAM_FORMAT && config::stream.pacing_max_bitrate_kbps > 0) {
+      const auto ip_bytes = session->config.packetsize + MAX_RTP_HEADER_SIZE +
+                            (address.is_v6() ? 40 : 20) + 8 +
+                            (session->video.cipher ? sizeof(video_packet_enc_prefix_t) : 0);
+      shaping_bps = std::uint64_t(config::stream.pacing_max_bitrate_kbps) * 1000 * ip_bytes / (ip_bytes + 38);
+    }
+    session->video.qos = platf::enable_socket_qos(ref->video_sock.native_handle(), address, session->video.peer.port(), platf::qos_data_type_e::video, session->config.videoQosType != 0, shaping_bps);
+#else
     session->video.qos = platf::enable_socket_qos(ref->video_sock.native_handle(), address, session->video.peer.port(), platf::qos_data_type_e::video, session->config.videoQosType != 0);
+#endif
 
 #ifdef _WIN32
     if (session->display_helper_gate.valid()) {

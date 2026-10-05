@@ -142,6 +142,7 @@ namespace platf {
   decltype(QOSCreateHandle) *fn_QOSCreateHandle = nullptr;
   decltype(QOSAddSocketToFlow) *fn_QOSAddSocketToFlow = nullptr;
   decltype(QOSRemoveSocketFromFlow) *fn_QOSRemoveSocketFromFlow = nullptr;
+  decltype(QOSSetFlow) *fn_QOSSetFlow = nullptr;
 
   HANDLE wlan_handle = nullptr;
 
@@ -2132,13 +2133,17 @@ namespace platf {
    * @param dscp_tagging Specifies whether to enable DSCP tagging on outgoing traffic.
    */
   std::unique_ptr<deinit_t> enable_socket_qos(uintptr_t native_socket, boost::asio::ip::address &address, uint16_t port, qos_data_type_e data_type, bool dscp_tagging) {
+    return enable_socket_qos(native_socket, address, port, data_type, dscp_tagging, 0);
+  }
+
+  std::unique_ptr<deinit_t> enable_socket_qos(uintptr_t native_socket, boost::asio::ip::address &address, uint16_t port, qos_data_type_e data_type, bool dscp_tagging, std::uint64_t max_bps) {
     SOCKADDR_IN saddr_v4;
     SOCKADDR_IN6 saddr_v6;
     PSOCKADDR dest_addr;
     bool using_connect_hack = false;
 
     // Windows doesn't support any concept of traffic priority without DSCP tagging
-    if (!dscp_tagging) {
+    if (!dscp_tagging && max_bps == 0) {
       return nullptr;
     }
 
@@ -2154,6 +2159,7 @@ namespace platf {
       fn_QOSCreateHandle = (decltype(fn_QOSCreateHandle)) GetProcAddress(qwave, "QOSCreateHandle");
       fn_QOSAddSocketToFlow = (decltype(fn_QOSAddSocketToFlow)) GetProcAddress(qwave, "QOSAddSocketToFlow");
       fn_QOSRemoveSocketFromFlow = (decltype(fn_QOSRemoveSocketFromFlow)) GetProcAddress(qwave, "QOSRemoveSocketFromFlow");
+      fn_QOSSetFlow = (decltype(fn_QOSSetFlow)) GetProcAddress(qwave, "QOSSetFlow");
 
       if (!fn_QOSCreateHandle || !fn_QOSAddSocketToFlow || !fn_QOSRemoveSocketFromFlow) {
         BOOST_LOG(error) << "qwave.dll is missing exports?"sv;
@@ -2176,6 +2182,9 @@ namespace platf {
 
     // If qWAVE is unavailable, just return
     if (!fn_QOSAddSocketToFlow || !qos_handle) {
+      if (max_bps) {
+        BOOST_LOG(warning) << "PyroWave kernel shaping unavailable; using the small-batch pacer"sv;
+      }
       return nullptr;
     }
 
@@ -2231,13 +2240,28 @@ namespace platf {
     }
 
     QOS_FLOWID flow_id = 0;
+    if (!dscp_tagging) {
+      traffic_type = QOSTrafficTypeBestEffort;
+    }
     if (!fn_QOSAddSocketToFlow(qos_handle, (SOCKET) native_socket, dest_addr, traffic_type, QOS_NON_ADAPTIVE_FLOW, &flow_id)) {
       auto winerr = GetLastError();
       BOOST_LOG(warning) << "QOSAddSocketToFlow() failed: "sv << winerr;
       return nullptr;
     }
 
-    return std::make_unique<qos_t>(flow_id);
+    auto qos = std::make_unique<qos_t>(flow_id);
+    if (max_bps) {
+      // qWAVE measures IP-level bytes. The caller leaves room for Ethernet
+      // overhead before asking the packet scheduler to shape the flow.
+      QOS_FLOWRATE_OUTGOING rate {max_bps, QOSShapeOnly, QOSFlowRateNotApplicable};
+      if (fn_QOSSetFlow && fn_QOSSetFlow(qos_handle, flow_id, QOSSetOutgoingRate, sizeof(rate), &rate, 0, nullptr)) {
+        BOOST_LOG(info) << "PyroWave kernel shaping active: "sv << max_bps << " IP-level bps to "sv << address << ':' << port;
+      } else {
+        const auto winerr = fn_QOSSetFlow ? GetLastError() : ERROR_PROC_NOT_FOUND;
+        BOOST_LOG(warning) << "PyroWave kernel shaping failed: "sv << winerr << "; using the small-batch pacer"sv;
+      }
+    }
+    return qos;
   }
 
   int64_t qpc_counter() {

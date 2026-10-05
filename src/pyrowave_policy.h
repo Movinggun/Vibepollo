@@ -34,6 +34,21 @@ namespace pyrowave::policy {
     std::uint64_t max_pacing_bps = 0
   );
 
+  /// Small batches limit downstream queue growth on a faster host NIC.
+  std::size_t capped_pacing_batch_packets(std::size_t packets_per_ms);
+
+  /// Charge every batch against its actual send time, without catch-up credit.
+  /// Keep one instance per session across frames and FEC blocks.
+  class batch_pacer_t {
+  public:
+    using clock = std::chrono::steady_clock;
+    clock::time_point due() const;
+    void sent(clock::time_point actual_start, std::size_t packets, std::size_t packets_per_ms);
+
+  private:
+    clock::time_point next_send {};
+  };
+
   enum class framing_e {
     records,  ///< Concatenated PyroWave records with padding records aligned to RTP shards.
     length_prefixed,  ///< `[u32 count] { [u32 size] [packet] }`, for the azafrob/dimizago clients.
